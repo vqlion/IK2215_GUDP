@@ -2,6 +2,7 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedList;
 import java.util.Random;
 import java.io.IOException;
@@ -23,13 +24,17 @@ public class GUDPSocket implements GUDPSocketAPI {
         int endPointQueueIndex = addEndpointToSendQueue(packetEndPoint);
 
         GUDPPacket gudppacket = GUDPPacket.encapsulate(packet);
-        DatagramPacket udppacket = gudppacket.pack();
-        
+
         if (!this.senderThread.isAlive()) {
             senderThread.start();
         }
-        
+
         synchronized (this.sendQueue) {
+            GUDPEndPoint endPoint = this.sendQueue.get(endPointQueueIndex);
+            int nextSeq = endPoint.getNextseqnum();
+            gudppacket.setSeqno(nextSeq);
+            endPoint.setLast(nextSeq);
+
             this.sendQueue.get(endPointQueueIndex).add(gudppacket);
             this.sendQueue.notifyAll();
         }
@@ -62,6 +67,12 @@ public class GUDPSocket implements GUDPSocketAPI {
                     return this.sendQueue.indexOf(queuedEndPoint);
                 }
             }
+            Random rand = new Random();
+            int endPointBSN = rand.nextInt();
+
+            endPoint.setBase(endPointBSN);
+            endPoint.setNextseqnum(endPointBSN + 1);
+
             this.sendQueue.add(endPoint);
             return this.sendQueue.indexOf(endPoint);
         }
@@ -89,14 +100,15 @@ public class GUDPSocket implements GUDPSocketAPI {
         InetAddress address2 = InetAddress.getByName("192.168.1.130");
         System.out.println(address);
         System.out.println(address2);
-        GUDPSocket gudpSocket = new GUDPSocket(new DatagramSocket(0, address));
+        GUDPSocket gudpSocket = new GUDPSocket(new DatagramSocket());
 
         byte[] buffer = new byte[10];
-        DatagramPacket packet = new DatagramPacket(buffer, 0, 10, address, 0);
-        DatagramPacket packet2 = new DatagramPacket(buffer, 0, 10, address2, 0);
+        DatagramPacket packet = new DatagramPacket(buffer, 0, 10, address, 2220);
+        DatagramPacket packet2 = new DatagramPacket(buffer, 0, 10, address2, 2220);
 
         gudpSocket.send(packet);
         gudpSocket.send(packet2);
+
     }
 
     private class SenderThread extends Thread {
@@ -110,7 +122,7 @@ public class GUDPSocket implements GUDPSocketAPI {
                 synchronized (GUDPSocket.this.sendQueue) {
                     while (GUDPSocket.this.sendQueue.size() == 0 || !messagesInSocketQueue(GUDPSocket.this.sendQueue)) {
                         try {
-                            System.out.println("Sender Thread waiting...");
+                            System.out.println(">>Sender Thread waiting...");
                             GUDPSocket.this.sendQueue.wait();
                         } catch (Exception e) {
                             Thread.currentThread().interrupt();
@@ -122,31 +134,26 @@ public class GUDPSocket implements GUDPSocketAPI {
                         try {
                             handleGUDPEndpoint(endPoint);
                         } catch (Exception e) {
-                            System.err.println("Error sending packet on enpoint" + endPoint);
+                            System.err.println("Error sending packet on enpoint" + endPoint + " error: " + e);
                         }
                     }
                 }
             }
         }
 
-        // TODO: test function handleGUDPEnpoint
         private void handleGUDPEndpoint(GUDPEndPoint endPoint) throws IOException {
             GUDPEndPoint.endPointState state = endPoint.getState();
+            GUDPEndPoint.readyEvent event = endPoint.getEvent();
 
             if (endPoint.isEmptyBuffer())
                 return;
 
-            System.out.println("Sender Thread handling endpoint " + endPoint);
+            System.out.println(">>Sender Thread handling endpoint " + endPoint);
+
+            InetSocketAddress endPointSocketAddress = endPoint.getRemoteEndPoint();
+
             if (state == GUDPEndPoint.endPointState.INIT) {
-                Random rand = new Random();
-                int endPointBSN = rand.nextInt();
-
-                InetSocketAddress endPointSocketAddress = endPoint.getRemoteEndPoint();
-
-                endPoint.setBase(endPointBSN);
-                endPoint.setExpectedseqnum(endPointBSN + 1);
-                endPoint.setNextseqnum(endPointBSN + 1);
-                endPoint.setLast(endPointBSN + 1);
+                int endPointBSN = endPoint.getBase();
 
                 byte[] buffer = new byte[0];
                 DatagramPacket BSNPacket = new DatagramPacket(buffer, 0, endPointSocketAddress);
@@ -156,16 +163,65 @@ public class GUDPSocket implements GUDPSocketAPI {
                 gudpPacket.setSeqno(endPointBSN);
                 DatagramPacket udpPacket = gudpPacket.pack();
 
-                System.out.println(
-                        "Endpoint processed INIT state " + endPoint.getRemoteEndPoint() + " -BSN- " + endPoint.getBase()
-                                + " -data- " + gudpPacket.getBytes());
+                GUDPSocket.this.datagramSocket.send(udpPacket);
+                System.out.println(GUDPSocket.bytesToHex(gudpPacket.getBytes()));
 
+                GUDPPacket firstDataPacket = endPoint.remove();
+                endPoint.add(gudpPacket);
+                endPoint.add(firstDataPacket);
+
+                endPoint.setState(GUDPEndPoint.endPointState.BSN);
+                endPoint.setEvent(GUDPEndPoint.readyEvent.SEND);
 
                 // FOR TESTING ONLY
+                // endPoint.removeAll();
 
-            endPoint.removeAll();
+            } else if (state == GUDPEndPoint.endPointState.BSN) {
+                // TODO: Test if compliant to window size
+                if (event == GUDPEndPoint.readyEvent.SEND) {
+
+                    int windowSize = endPoint.getWindowSize();
+                    int base = endPoint.getBase();
+                    int nextSeq = endPoint.getNextseqnum();
+
+                    for (int i = base; i < base + windowSize; i++) {
+                        if (i < nextSeq)
+                            continue;
+
+                        GUDPPacket packet = endPoint.getPacket(i);
+                        if (packet == null || packet.getSeqno() != nextSeq)
+                            continue;
+
+                        GUDPSocket.this.datagramSocket.send(packet.pack());
+                        System.out.println(GUDPSocket.bytesToHex(packet.getBytes()));
+                        endPoint.setNextseqnum(nextSeq + 1);
+                    }
+
+                    endPoint.setEvent(GUDPEndPoint.readyEvent.WAIT);
+                    endPoint.removeAll();
+
+                }
             }
+
+            System.out.println(
+                    "   Endpoint processed " + state + " state " + endPoint.getRemoteEndPoint() + " -BSN- "
+                            + endPoint.getBase()
+                            + " -nextSeq- " + endPoint.getNextseqnum());
         }
+    }
+
+    // TESTING: print packets data
+
+    private static final byte[] HEX_ARRAY = "0123456789ABCDEF".getBytes(StandardCharsets.US_ASCII);
+
+    public static String bytesToHex(byte[] bytes) {
+        byte[] hexChars = new byte[bytes.length * 2];
+        for (int j = 0; j < bytes.length; j++) {
+            int v = bytes[j] & 0xFF;
+            hexChars[j * 2] = HEX_ARRAY[v >>> 4];
+            hexChars[j * 2 + 1] = HEX_ARRAY[v & 0x0F];
+        }
+        return new String(hexChars, StandardCharsets.UTF_8);
     }
 
 }
