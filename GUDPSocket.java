@@ -14,6 +14,7 @@ public class GUDPSocket implements GUDPSocketAPI {
     private LinkedList<GUDPEndPoint> receiveQueue = new LinkedList<>();
 
     private SenderThread senderThread = new SenderThread();
+    boolean senderThreadRunning = true;
 
     public GUDPSocket(DatagramSocket socket) {
         datagramSocket = socket;
@@ -58,7 +59,23 @@ public class GUDPSocket implements GUDPSocketAPI {
     }
 
     public void close() throws IOException {
-        ;
+        System.out.println("------------");
+        System.out.println("APP: Closing socket " + this.datagramSocket.getLocalSocketAddress());
+        this.senderThreadRunning = false;
+        this.senderThread.interrupt();
+        clearSendQueue();
+        if (!this.datagramSocket.isClosed())
+            this.datagramSocket.close();
+    }
+
+    private void clearSendQueue() {
+        for (GUDPEndPoint endPoint : this.sendQueue) {
+            endPoint.removeAll();
+            endPoint.stopTimer();
+            endPoint.setState(GUDPEndPoint.endPointState.CLOSED);
+        }
+
+        this.sendQueue.clear();
     }
 
     private int addEndpointToSendQueue(GUDPEndPoint endPoint) throws IOException {
@@ -107,35 +124,13 @@ public class GUDPSocket implements GUDPSocketAPI {
         return false;
     }
 
-    /*
-     * Main just meant for testing
-     */
-    public static void main(String args[]) throws IOException {
-        InetAddress address = InetAddress.getLoopbackAddress();
-        InetAddress address2 = InetAddress.getByName("192.168.1.130");
-        System.out.println(address);
-        System.out.println(address2);
-        GUDPSocket gudpSocket = new GUDPSocket(new DatagramSocket());
-
-        byte[] buffer = new byte[10];
-        DatagramPacket packet = new DatagramPacket(buffer, 0, 10, address, 2220);
-        DatagramPacket packet2 = new DatagramPacket(buffer, 0, 10, address2, 2220);
-
-        gudpSocket.send(packet2);
-        gudpSocket.send(packet2);
-        gudpSocket.send(packet2);
-        gudpSocket.send(packet2);
-        // gudpSocket.send(packet2);
-
-    }
-
     private class SenderThread extends Thread {
 
         public SenderThread() {
         }
 
         public void run() {
-            while (true) {
+            while (GUDPSocket.this.senderThreadRunning) {
 
                 synchronized (GUDPSocket.this.sendQueue) {
                     while (GUDPSocket.this.sendQueue.size() == 0 || !messagesInSocketQueue(GUDPSocket.this.sendQueue)) {
@@ -152,7 +147,8 @@ public class GUDPSocket implements GUDPSocketAPI {
                         try {
                             handleGUDPEndpoint(endPoint);
                         } catch (Exception e) {
-                            System.err.println(">>Sender Thread: Error sending packet on enpoint" + endPoint.getRemoteEndPoint() + ". error: " + e);
+                            System.err.println(">>Sender Thread: Error sending packet on enpoint"
+                                    + endPoint.getRemoteEndPoint() + ". error: " + e);
                         }
                     }
                 }
@@ -163,16 +159,25 @@ public class GUDPSocket implements GUDPSocketAPI {
             GUDPEndPoint.endPointState state = endPoint.getState();
             GUDPEndPoint.readyEvent event = endPoint.getEvent();
 
-            if (endPoint.isEmptyBuffer() || event == GUDPEndPoint.readyEvent.WAIT)
+            if (event == GUDPEndPoint.readyEvent.WAIT)
                 return;
-
+            
+            System.out.println();
             System.out.println(">>Sender Thread handling endpoint " + endPoint.getRemoteEndPoint());
+            System.out.println("--Data of packets sent--");
 
             InetSocketAddress endPointSocketAddress = endPoint.getRemoteEndPoint();
 
-            if(state == GUDPEndPoint.endPointState.MAXRETRIED) {
-                System.out.println("  Endpoint " + endPointSocketAddress + " reached max retry.");
+            if (state == GUDPEndPoint.endPointState.MAXRETRIED) {
                 endPoint.removeAll();
+                endPoint.setState(GUDPEndPoint.endPointState.FINISHED);
+                throw new IOException("Endpoint " + endPointSocketAddress + " reached max retry.");
+            }
+
+            if (state == GUDPEndPoint.endPointState.FINISHED) {
+                if (endPoint.isEmptyBuffer()) {
+
+                }
             }
 
             if (event == GUDPEndPoint.readyEvent.INIT) {
@@ -246,6 +251,7 @@ public class GUDPSocket implements GUDPSocketAPI {
                 }
 
             }
+            System.out.println("--Data of packets sent--");
 
             System.out.println(
                     "  Endpoint " + endPoint.getRemoteEndPoint() + " processed \n   state: " + state + "\n   NextSeq: "
@@ -253,6 +259,36 @@ public class GUDPSocket implements GUDPSocketAPI {
                             + "\n   LastSeq: " + endPoint.getLast()
                             + "\n   Retry: " + endPoint.getRetry());
         }
+    }
+
+    /*
+     * Main just meant for testing
+     */
+    public static void main(String args[]) throws IOException {
+        InetAddress address = InetAddress.getLoopbackAddress();
+        InetAddress address2 = InetAddress.getByName("192.168.1.130");
+        System.out.println(address);
+        System.out.println(address2);
+        GUDPSocket gudpSocket = new GUDPSocket(new DatagramSocket());
+
+        byte[] buffer = new byte[10];
+        DatagramPacket packet = new DatagramPacket(buffer, 0, 10, address, 2220);
+        DatagramPacket packet2 = new DatagramPacket(buffer, 0, 10, address2, 2220);
+
+        gudpSocket.send(packet2);
+        gudpSocket.send(packet2);
+        gudpSocket.send(packet2);
+        gudpSocket.send(packet2);
+        // gudpSocket.send(packet2);
+
+        // try {
+        //     Thread.sleep(7000);
+        // } catch (Exception e) {
+        //     // TODO: handle exception
+        // }
+
+        // gudpSocket.close();
+
     }
 
     // TESTING: print packets data
