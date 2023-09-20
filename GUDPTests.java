@@ -13,10 +13,11 @@ public class GUDPTests {
         GUDPSocket gudpSocket2 = new GUDPSocket(new DatagramSocket(8081, InetAddress.getByName("10.93.23.154")));
         
         byte[] buffer = new byte[10];
+        buffer[2] = 1;
         DatagramPacket packet = new DatagramPacket(buffer, 10, InetAddress.getByName("10.93.23.154"), gudpSocket2.getPort());
 
         byte[] buffer2 = new byte[1500];
-        DatagramPacket packet2 = new DatagramPacket(buffer, buffer.length);
+        DatagramPacket packet2 = new DatagramPacket(buffer2, buffer2.length, InetAddress.getByName("10.93.23.154"), gudpSocket.getPort());
 
         System.out.println(packet.getAddress());
 
@@ -25,14 +26,12 @@ public class GUDPTests {
         gudpSocket.send(packet);
         gudpSocket.send(packet);
         // gudpSocket.send(packet2);
-
-        // try {
-        // Thread.sleep(7000);
-        // } catch (Exception e) {
-        // // TODO: handle exception
-        // }
-
+        
+        
         gudpSocket2.receive(packet2);
+        gudpSocket.finish();
+
+        System.out.println("APP SIDE: RECEIVED PACKET:  " + GUDPSocket.bytesToHex(packet2.getData()));
 
         // gudpSocket.close();
 
