@@ -29,6 +29,7 @@ public class GUDPTests {
         
         
         gudpSocket2.receive(packet2);
+        System.out.println("APP SIDE: receive passed");
         gudpSocket.finish();
 
         System.out.println("APP SIDE: RECEIVED PACKET:  " + GUDPSocket.bytesToHex(packet2.getData()));

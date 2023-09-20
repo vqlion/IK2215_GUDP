@@ -54,6 +54,9 @@ public class GUDPSocket implements GUDPSocketAPI {
             int last = endPoint.getLast();
             gudppacket.setSeqno(last + 1);
             endPoint.setLast(last + 1);
+            if (endPoint.getState() == GUDPEndPoint.endPointState.FINISHED
+                    || endPoint.getState() == GUDPEndPoint.endPointState.CLOSED)
+                endPoint.setState(GUDPEndPoint.endPointState.READY);
 
             this.sendQueue.get(endPointQueueIndex).add(gudppacket);
             this.sendQueue.notifyAll();
@@ -85,17 +88,19 @@ public class GUDPSocket implements GUDPSocketAPI {
                 // TODO: handle exception
             }
 
-            for (GUDPEndPoint endPoint : this.receiveQueue) {
-                if (endPoint.isEmptyBuffer())
-                    continue;
-                if (!(packetAddress.equals(endPoint.getRemoteEndPoint().getAddress())
-                        && packetPort == endPoint.getRemoteEndPoint().getPort()))
-                    continue;
+        }
 
-                GUDPPacket gudpPacketReceived = endPoint.remove();
-                gudpPacketReceived.decapsulate(packet);
-                return;
-            }
+        for (GUDPEndPoint endPoint : this.receiveQueue) {
+            if (endPoint.isEmptyBuffer())
+                continue;
+            if (!(packetAddress.equals(endPoint.getRemoteEndPoint().getAddress())
+                    && packetPort == endPoint.getRemoteEndPoint().getPort()))
+                continue;
+
+            GUDPPacket gudpPacketReceived = endPoint.remove();
+            gudpPacketReceived.decapsulate(packet);
+            System.out.println("RECEIVE METHOD " + packet.getAddress() + ':' + packet.getPort());
+            return;
         }
     }
 
@@ -114,6 +119,10 @@ public class GUDPSocket implements GUDPSocketAPI {
 
             endPoint.add(gudpPacket);
             endPoint.setState(GUDPEndPoint.endPointState.FINISHED);
+            System.out.println("Finish: adding FINPACKET to endpoint " + endPointSocketAddress);
+            synchronized (this.sendQueue) {
+                this.sendQueue.notifyAll();
+            }
         }
 
         while (!allEndpointsClosed(sendQueue)) {
@@ -132,7 +141,9 @@ public class GUDPSocket implements GUDPSocketAPI {
         System.out.println("------------");
         System.out.println("APP: Closing socket " + this.datagramSocket.getLocalSocketAddress());
         this.senderThreadRunning = false;
+        this.receiverThreadRunning = false;
         this.senderThread.interrupt();
+        this.receiverThread.interrupt();
         clearSendQueue();
         if (!this.datagramSocket.isClosed())
             this.datagramSocket.close();
@@ -222,7 +233,8 @@ public class GUDPSocket implements GUDPSocketAPI {
             while (GUDPSocket.this.senderThreadRunning) {
 
                 synchronized (GUDPSocket.this.sendQueue) {
-                    while (GUDPSocket.this.sendQueue.size() == 0 || !messagesInSocketQueue(GUDPSocket.this.sendQueue)) {
+                    while (GUDPSocket.this.senderThreadRunning && (GUDPSocket.this.sendQueue.size() == 0
+                            || !messagesInSocketQueue(GUDPSocket.this.sendQueue))) {
                         try {
                             System.out.println(">>Sender Thread waiting...");
                             GUDPSocket.this.sendQueue.wait();
@@ -248,7 +260,8 @@ public class GUDPSocket implements GUDPSocketAPI {
             GUDPEndPoint.endPointState state = endPoint.getState();
             GUDPEndPoint.readyEvent event = endPoint.getEvent();
 
-            if (event == GUDPEndPoint.readyEvent.WAIT || event == GUDPEndPoint.readyEvent.RECEIVE || state == GUDPEndPoint.endPointState.CLOSED)
+            if (event == GUDPEndPoint.readyEvent.WAIT || event == GUDPEndPoint.readyEvent.RECEIVE
+                    || state == GUDPEndPoint.endPointState.CLOSED)
                 return;
 
             System.out.println();
@@ -403,7 +416,8 @@ public class GUDPSocket implements GUDPSocketAPI {
             int endPointIndex = getEndpointReceiveQueueIndex(packetEndPoint);
 
             System.out.println(">>Receiver thread received packet on " + GUDPSocket.this + "\n  packet type: " + type
-                    + "\n  seqno: " + sequenceNumber);
+                    + "\n  seqno: " + sequenceNumber
+                    + "\n  content " + bytesToHex(packet.getBytes()));
             if (type == GUDPPacket.TYPE_BSN) {
                 packetEndPoint = GUDPSocket.this.receiveQueue.get(endPointIndex);
 
@@ -411,18 +425,18 @@ public class GUDPSocket implements GUDPSocketAPI {
                 sendAck(packetEndPoint);
             } else if (type == GUDPPacket.TYPE_DATA) {
                 packetEndPoint = GUDPSocket.this.receiveQueue.get(endPointIndex);
-                
+
                 packetEndPoint.setExpectedseqnum(sequenceNumber);
                 sendAck(packetEndPoint);
-                
+
                 packetEndPoint.add(packet);
                 GUDPSocket.this.receiveQueue.notifyAll();
             } else if (type == GUDPPacket.TYPE_ACK) {
                 endPointIndex = GUDPSocket.this.getEnpointSendQueueIndex(packetEndPoint);
                 packetEndPoint = GUDPSocket.this.sendQueue.get(endPointIndex);
-                
+
                 System.out.println("UPDATING ENDPOINT " + packetEndPoint.getRemoteEndPoint());
-                
+
                 updateEndpointOnACK(packetEndPoint, sequenceNumber);
             } else if (type == GUDPPacket.TYPE_FIN) {
                 packetEndPoint = GUDPSocket.this.receiveQueue.get(endPointIndex);
