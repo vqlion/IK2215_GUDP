@@ -1,3 +1,5 @@
 *.class
 *.png
 *.txt
+*tests
+*tests2

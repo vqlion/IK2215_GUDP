@@ -90,6 +90,18 @@ public class GUDPSocket implements GUDPSocketAPI {
 
         }
 
+        if (packetAddress == null) {
+            for (GUDPEndPoint endPoint : this.receiveQueue) {
+                if (endPoint.isEmptyBuffer())
+                    continue;
+
+                GUDPPacket gudpPacketReceived = endPoint.remove();
+                gudpPacketReceived.decapsulate(packet);
+                System.out.println("RECEIVE METHOD " + packet.getAddress() + ':' + packet.getPort());
+                return;
+            }
+        }
+
         for (GUDPEndPoint endPoint : this.receiveQueue) {
             if (endPoint.isEmptyBuffer())
                 continue;
@@ -236,7 +248,7 @@ public class GUDPSocket implements GUDPSocketAPI {
                     while (GUDPSocket.this.senderThreadRunning && (GUDPSocket.this.sendQueue.size() == 0
                             || !messagesInSocketQueue(GUDPSocket.this.sendQueue))) {
                         try {
-                            System.out.println(">>Sender Thread waiting...");
+                            System.out.println(">>Sender Thread waiting..." + GUDPSocket.this.senderThreadRunning);
                             GUDPSocket.this.sendQueue.wait();
                         } catch (Exception e) {
                             Thread.currentThread().interrupt();
